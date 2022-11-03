@@ -276,7 +276,7 @@ IgnoreEvents = ['ConsoleLogin','CredentialVerification','CredentialChallenge','U
 dumpLogs(dataDir,data[AccountId],'ap-southeast-2')
 dumpLogs(dataDir,data[AccountId],'us-east-1')
 
-readLogs(data[AccountId],dataDir,'153977100785',IgnoreEvents)
+readLogs(data[AccountId],dataDir,AccountId,IgnoreEvents)
 
 print('Write the data file...')
 with open(dataFile,'wt') as q:
