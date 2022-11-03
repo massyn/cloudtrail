@@ -11,8 +11,6 @@ def read_cloudtrail_events(region,StartTime,OutputPath):
     else:
         st = StartTime
 
-    IgnoreEvents = ['ConsoleLogin','CredentialVerification','CredentialChallenge','UpdateInstanceAssociationStatus','UpdateInstanceInformation','UpdateInstanceCustomHealthStatus','AssumeRole','AssumeRoleWithSAML']
-
     latest = None
     count = 0
     
@@ -31,11 +29,10 @@ def read_cloudtrail_events(region,StartTime,OutputPath):
             eventTime = datetime.datetime.strptime(CloudTrailEvent['eventTime'], "%Y-%m-%dT%H:%M:%SZ")
             eventTimeStamp = eventTime.strftime('%Y%m%d-%H%M%S')
 
-            if not eventName in IgnoreEvents:
-                # == save the file
-                fileName = f"{OutputPath}/{recipientAccountId}-{eventTimeStamp}-{eventName}-{eventID}.json"
-                with open(fileName,"wt") as q:
-                    q.write(json.dumps(CloudTrailEvent,indent=4))
+            # == save the file
+            fileName = f"{OutputPath}/{recipientAccountId}-{eventTimeStamp}-{eventName}-{eventID}.json"
+            with open(fileName,"wt") as q:
+                q.write(json.dumps(CloudTrailEvent,indent=4))
 
             # == determine the latest time
             if latest == None:
@@ -49,30 +46,9 @@ def read_cloudtrail_events(region,StartTime,OutputPath):
     print(f"Total of {count} events...")
     return latest
 
-def get_caller_identity():
-    return boto3.client('sts').get_caller_identity()['Account']
-
-def dumpLogs(outputPath,region):
-    try:
-        print('Reading existing file...')
-        with open('data.json','rt') as q:
-            data = json.load(q)
-    except:
-        print('Start a fresh file...')
-        data = {}
-
-    a = get_caller_identity()
-    print(f"AccountID = {a}")
-    if not a in data:
-        data[a] = { 'latest' : {}}
-
-    latest = read_cloudtrail_events(region,data[a]['latest'].get(region),outputPath)
-
-    data[a]['latest'][region] = latest.strftime('%Y-%m-%d %H:%M:%S')
-
-    print('Write the data file...')
-    with open('data.json','wt') as q:
-        q.write(json.dumps(data,indent=4))
+def dumpLogs(outputPath,data,region):
+    latest = read_cloudtrail_events(region,data['latest'].get(region),outputPath)
+    data['latest'][region] = latest.strftime('%Y-%m-%d %H:%M:%S')
 
 def parseEventLog(data,event):
     def myDB(db,action,leaf,key,data):
@@ -189,8 +165,7 @@ def parseEventLog(data,event):
                 "eventName" : "CreateBucket",
                 "action" : "add",
                 "key" : "bucketName",
-                "data" : event['requestParameters'],
-                'debug' : True
+                "data" : event['requestParameters']
             },
             {
                 "eventName" : "DeleteBucket",
@@ -247,32 +222,62 @@ def parseEventLog(data,event):
 
     return result
 
-def readLogs(data,outputPath,accountId):
-    pivot = {}
+def readLogs(data,outputPath,accountId,IgnoreEvents):
+    data['unknownCount'] = {}
+    data['TodoList'] = {}
+
     for f in os.listdir(outputPath):
         with open(f"{outputPath}/{f}",'rt') as j:
             d = json.load(j)
 
             if d['recipientAccountId'] == accountId and not 'errorCode' in d:
+                if not d['eventName'] in IgnoreEvents:
+                    x = parseEventLog(data['data'],d)
+                    
+                    if not x:
+                        # == calculate totals
+                        if d['eventName'] not in data['unknownCount']:
+                            data['unknownCount'][d['eventName']] = 0
+                        data['unknownCount'][d['eventName']] += 1
 
-                x = parseEventLog(data,d)
-                
-                if not x: # and d['eventName'] not in ['SendCommand','AssumeRole','StartInstances','RunInstances','StopInstances','RebootInstances','UpdateInstanceInformation','TerminateInstances','ModifyInstanceAttribute','CreateStackInstances','DeleteStackInstances','CreateDBInstance','ModifyDBInstance','DeleteDBInstance','CreateLogStream']:
-                     
-                    # == calculate totals
-                    if d['eventName'] not in pivot:
-                        pivot[d['eventName']] = 0
-                    pivot[d['eventName']] += 1
+                        # == record a single event that we need to work on
+                        if d['eventName'] not in data['TodoList']:
+                            data['TodoList'][d['eventName']] = d
 
     #print(json.dumps(pivot,indent=4))
-    print(json.dumps(data,indent=4))
+    #print(json.dumps(data,indent=4))
     
         
 dataDir = '../../cloudtrail'
+dataFile = '../data.json'
 
+# == read the data
+try:
+    print('Reading existing file...')
+    with open(dataFile,'rt') as q:
+        data = json.load(q)
+except:
+    print('Start a fresh file...')
+    data = {}
 
-dumpLogs(dataDir,'ap-southeast-2')
-dumpLogs(dataDir,'us-east-1')
+AccountId = boto3.client('sts').get_caller_identity()['Account']
+if not AccountId in data:
+    data[AccountId] = {}
+if not 'latest' in data[AccountId]:
+    data[AccountId]['latest'] = None
+if not 'data' in data[AccountId]:
+    data[AccountId]['data'] = {}
 
-db = {}
-readLogs(db,dataDir,'153977100785')
+if not 'unknownCount' in data[AccountId]:
+    data[AccountId]['unknownCount'] = {}
+
+IgnoreEvents = ['ConsoleLogin','CredentialVerification','CredentialChallenge','UpdateInstanceAssociationStatus','UpdateInstanceInformation','UpdateInstanceCustomHealthStatus','AssumeRole','AssumeRoleWithSAML']    
+
+dumpLogs(dataDir,data[AccountId],'ap-southeast-2')
+dumpLogs(dataDir,data[AccountId],'us-east-1')
+
+readLogs(data[AccountId],dataDir,'153977100785',IgnoreEvents)
+
+print('Write the data file...')
+with open(dataFile,'wt') as q:
+    q.write(json.dumps(data,indent=4))
